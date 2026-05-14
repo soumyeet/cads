@@ -1,0 +1,96 @@
+1 Introduction
+Bayesian statistical inference requires computing posterior distributions over model parameters — distributions that, in most real-world problems, resist closed-form evaluation. When the parameter space is high-dimensional and parameters are mutually dependent, direct integration becomes analytically intractable. The Gibbs Sampler, introduced by Geman and Geman (1984) and formalised for general Bayesian inference by Gelfand and Smith (1990), provides an elegant and exact solution to this problem. Rather than tackling the joint posterior distribution all at once, the Gibbs Sampler decomposes it into a sequence of univariate conditional distributions — each tractable — and samples from them iteratively, constructing a chain of draws that converges in distribution to the true joint posterior.
+This project is a comprehensive study of the Gibbs Sampler: its mathematical foundations, correct implementation from first principles, convergence behaviour, and deployment on a substantive real-world problem. We first validate the sampler on controlled synthetic settings — parameter recovery in a multivariate normal distribution and a Bayesian linear regression — where ground truth is known exactly, allowing us to confirm the correctness of the implementation through quantitative diagnostics. Having established this validation, we then deploy the sampler on its primary empirical target: detecting latent market regimes in financial time series.
+The financial application uses a two-state Hidden Markov structure — a Markov Switching Model — as the probabilistic model over which Gibbs sampling performs inference. To be precise, the Gibbs Sampler is the inferential engine; the Markov Switching Model is the data-generating model whose parameters we wish to learn. The sampler draws from the full conditional distributions of each unknown — regime-specific means, variances, transition probabilities, and the entire latent state sequence — cycling through them until the chain converges. Applied to weekly log-returns of the S&P 500 and NIFTY 50 from 2005 to 2026, the sampler successfully identifies distinct bull and bear market regimes, including the 2008 Global Financial Crisis and the 2020 COVID-19 crash, without any labelled training data.
+
+2 Background and Motivation
+2.1 Theoretical Background
+Given a Bayesian model with parameters and observed data , the posterior is the central object of inference. Computing the marginal distribution of any single parameter requires integrating out all others:
+
+This integral is generally unavailable in closed form. The Gibbs Sampler resolves this by repeatedly drawing each parameter from its full conditional distribution — the posterior of that parameter given the current values of all others and the data:
+
+Under standard regularity conditions, the sequence converges in distribution to the target posterior (Gelfand and Smith, 1990). The key insight is that while the joint distribution may be complex, the full conditionals are often standard distributions — Normal, Inverse-Gamma, Beta — from which sampling is straightforward, particularly when conjugate priors are chosen.
+When latent (unobserved) variables are present, the Gibbs Sampler is extended via Data Augmentation (Tanner and Wong, 1987): the latent variables are treated as additional unknowns and sampled alongside the model parameters within the same iterative scheme. For models with sequential latent states — such as Hidden Markov Models — the Forward-Filtering Backward-Sampling (FFBS) algorithm (Carter and Kohn, 1994; Chib, 1996) allows the entire latent state sequence to be sampled jointly as a single block, dramatically improving the efficiency of the sampler.
+2.2 Project Motivation
+Two considerations drive this project:
+Computational depth. Building the Gibbs Sampler entirely from scratch in Python — without abstracted probabilistic programming libraries — forces a precise understanding of conjugate prior derivations, full conditional calculations, block-update strategies, and convergence diagnostics. This ground-up construction is itself the primary learning objective.
+Empirical relevance. Financial return series are well-known to exhibit volatility clustering and structural breaks — periods of calm growth interrupted by sharp, high-volatility contractions. These dynamics are not captured by any constant-parameter model. A two-state Hidden Markov structure, with parameters estimated entirely through Gibbs sampling, provides a principled probabilistic framework for quantifying these regimes and their uncertainty. The 2008 Global Financial Crisis and the 2020 COVID-19 shock provide historically significant test cases for whether an unsupervised Bayesian algorithm can identify these breaks purely from the return data, without any external labels.
+
+
+3 Problem Statement
+Research Question: How can the Gibbs Sampler be rigorously implemented, validated, and applied to perform full Bayesian inference — including recovery of latent structure — in complex, high-noise empirical settings?
+Our objectives are:
+(i) Implement the Gibbs Sampler from first principles and confirm, on synthetic data with known ground truth, that the sampler correctly recovers parameters in a multivariate normal and a Bayesian linear regression setting.
+(ii) Demonstrate that the convergence diagnostics — the Gelman-Rubin statistic and the Effective Sample Size (ESS) — provide reliable, quantitative confirmation of chain stationarity.
+(iii) Extend the sampler via Data Augmentation and the FFBS algorithm to perform posterior inference on a two-state Markov Switching Model, estimating all regime parameters and the full latent state sequence simultaneously.
+(iv) Apply this framework to weekly log-returns of the S&P 500 and NIFTY 50 (2005–2026), and evaluate whether the Gibbs Sampler correctly identifies known historical market crises in a fully unsupervised manner.
+(v) Conduct a deeper structural analysis — computing implied expected regime durations and unconditional ergodic probabilities — to quantify and compare the regime dynamics of a developed and an emerging equity market.
+
+
+5 Methodology and Theoretical Framework
+5.1 The Gibbs Sampling Algorithm
+The Gibbs Sampler is a special case of MCMC in which every proposal is accepted exactly, because each draw is made directly from a full conditional distribution. Given a joint posterior over parameters, the algorithm proceeds as follows:
+Algorithm 1 — The Gibbs Sampler
+Require: Initial values , total iterations , burn-in 
+	•	for do
+	•	for do
+	•	Draw 
+	•	end for
+	•	end for
+	•	return 
+The burn-in period discards the early transient draws before the chain has converged to the stationary distribution. Post-burn-in samples are treated as approximate draws from the true posterior and used to compute all reported estimates.
+5.2 Conjugate Full Conditionals
+The efficiency of the Gibbs Sampler rests on choosing conjugate priors — prior distributions whose functional form is preserved under Bayesian updating, yielding full conditionals that belong to standard, directly sampleable families. For each parameter class used in this project:
+Mean parameters with a Normal prior and a Normal likelihood yield a Normal full conditional:
+
+where is the number of observations assigned to regime and is their mean.
+Variance parameters with an Inverse-Gamma prior and a Normal likelihood yield an Inverse-Gamma full conditional:
+
+Transition probabilities with a Beta prior and a Binomial likelihood (transition counts) yield a Beta full conditional:
+
+where is the count of transitions staying in regime and is the count of exits from .
+5.3 Extension to Latent Variable Models via Data Augmentation
+The Gibbs Sampler's reach extends naturally to models with unobserved latent variables through the Data Augmentation principle (Tanner and Wong, 1987). The core idea is simple: treat the latent variables as additional unknown parameters and include them in the Gibbs sweep. This converts a marginalisation over missing data into a standard conditional sampling step.
+In the financial application, the latent variable is the hidden regime sequence , where each indicates whether the market is in a bear or bull state at time . The augmented parameter vector is , and the Gibbs sweep cycles over:
+	•	Sample — draw the entire hidden state sequence given current parameters.
+	•	Sample — draw each regime mean given the current state assignments.
+	•	Sample — draw each regime variance given current state assignments and means.
+	•	Sample — draw each transition probability from the transition counts in .
+Each step is a standard conjugate draw; the intractable joint posterior over parameters and hidden states is handled entirely within the Gibbs framework.
+5.4 Block Sampling of the Latent State Sequence via FFBS
+Sampling each individually in Step 1 above creates severe autocorrelation in the chain, because consecutive states are strongly dependent through the Markov structure. The Gibbs Sampler resolves this by treating the entire vector as a single block update, using the Forward-Filtering Backward-Sampling (FFBS) algorithm (Carter and Kohn, 1994; Chib, 1996).
+Forward pass — compute filtered probabilities recursively from to :
+
+where is the emission likelihood under regime .
+Backward pass — sample the state sequence exactly from back to :
+
+This backward pass produces a single exact draw of the full sequence from its conditional posterior, completing the block update. By jointly sampling all states rather than one at a time, FFBS eliminates the autocorrelation bottleneck and dramatically improves the Effective Sample Size (ESS) of the chain.
+5.5 Definition of Variables
+The following variables are used throughout the regime-detection application:
+	•	: observed log-return at time .
+	•	: latent regime indicator; is the bear (high-volatility) state, is the bull (low-volatility) state.
+	•	: expected mean log-return in regime .
+	•	: return variance in regime .
+	•	: probability of remaining in regime (self-transition).
+	•	: Markov transition matrix with rows summing to one.
+	•	: expected duration (in weeks) of regime .
+	•	: unconditional ergodic probability of regime .
+5.6 Prior Specifications
+All priors are conjugate and assigned as follows:
+
+The Beta(8, 2) prior on transition probabilities has mean 0.8, encoding the well-established economic intuition that financial market regimes are persistent — a bear market does not flip to a bull market overnight. This is an intentional modelling choice, not a default.
+5.7 Identifiability: Addressing Label-Switching
+A known issue in mixture models is label-switching: the likelihood is symmetric with respect to permutations of regime labels, so without constraints the Gibbs Sampler may arbitrarily swap the identities of the two states across iterations, rendering posterior means meaningless. We address this through structured initialisation: is assigned to observations below the sample median of , and to those above. This seeds the chain with an economically interpretable starting configuration — below-median returns as bear, above-median as bull — and the informative transition prior reinforces label stability throughout the run.
+5.8 Incorporating the Immediate Past: Autoregressive Conditioning
+The baseline Markov Switching Model treats each observation yₜ as conditionally independent of all past observations given the current regime Sₜ. In practice, financial return series exhibit short-run serial dependence — a property that the purely memoryless emission model fails to capture. To address this, we augment the model with an immediate past feature: the lagged return yₜ₋₁ is included as a covariate in the emission distribution, transforming the regime-conditional likelihood from a simple Gaussian into a regime-specific autoregressive specification:
+yₜ | Sₜ = j, yₜ₋₁  ~  N(μⱼ + φⱼ yₜ₋₁,  σⱼ²)
+where φⱼ is the regime-specific autoregressive coefficient capturing the directional persistence of returns within each state. This parameter is assigned a Normal prior φⱼ ~ N(0, γ²), which, combined with a Normal likelihood conditional on μⱼ and σⱼ², yields a conjugate Normal full conditional for φⱼ:
+φⱼ | S, μⱼ, σⱼ², y  ~  N( μφ ,  σφ² )
+where the posterior mean and variance are given by the standard Normal-Normal update: σφ² = (1/γ² + Σₜ:Sₜ=j yₜ₋₁² / σⱼ²)⁻¹ and μφ = σφ² · Σₜ:Sₜ=j yₜ₋₁(yₜ − μⱼ) / σⱼ². The autoregressive coefficient φⱼ is therefore added as a fifth block to the Gibbs sweep, sampled after the regime means and before the transition probabilities. Incorporating the immediate past substantially reduces the residual variance attributed to the emission noise and can sharpen the regime probability estimates in periods of strong momentum or mean-reversion.
+5.9 Monthly Aggregation of Return Series
+The primary analysis operates on weekly log-returns, a frequency that balances granularity against noise. However, regime transitions identified at the weekly frequency may reflect transient fluctuations rather than genuine structural shifts in market conditions. To assess the robustness of the inferred regimes and to align the analysis with the horizon at which most macroeconomic and institutional signals operate, we introduce a monthly aggregation step as a complementary analysis frequency.
+Monthly log-returns are constructed from daily price data by compounding within each calendar month:
+R𝒜 = log( P𝒜,last / P𝒜,first )
+where P𝒜,first and P𝒜,last are the opening and closing prices of calendar month 𝒜 respectively. This aggregation serves three purposes. First, it suppresses high-frequency noise that can generate spurious short-lived regime assignments at the weekly scale. Second, it increases the per-observation information content — each monthly return integrates over approximately four to five weeks of trading activity — which reduces the posterior uncertainty on the regime-specific parameters μⱼ and σⱼ². Third, expected regime durations expressed in months are directly interpretable against macroeconomic cycle lengths reported in the business-cycle literature.
+The identical Gibbs Sampler — with all prior specifications, the FFBS block update, and the label-stabilisation initialisation from Section 5.7 — is applied without modification to the monthly series. The only adjustment concerns the prior on transition probabilities: the Beta(8, 2) prior, which encodes a persistence expectation of approximately five weeks per regime, is recalibrated to Beta(10, 2) for the monthly series, reflecting the stronger empirical regularity that bull and bear markets, measured at the monthly horizon, persist for at least several months rather than several weeks. The resulting posterior regime sequences from the weekly and monthly analyses are then compared to assess cross-frequency consistency of the identified regimes, with discrepancies interpreted as evidence of transient noise at the weekly scale.
+
